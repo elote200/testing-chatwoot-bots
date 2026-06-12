@@ -45,11 +45,30 @@ OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.2')
 
-SYSTEM_PROMPT = (
-    "You are a helpful support assistant for a company called Acme Inc. "
-    "Answer concisely and naturally in the same language as the user. "
-    "Use the conversation history to understand the context."
-)
+ACCOUNT_CACHE = {"name": None}  # cache simple para no pedirlo en cada webhook
+
+def get_account_name(account_id):
+    """Pide el nombre de la cuenta a Chatwoot y lo cachea."""
+    if ACCOUNT_CACHE["name"]:
+        return ACCOUNT_CACHE["name"]
+    url = f"{CHATWOOT_URL}/api/v1/accounts/{account_id}"
+    headers = {"api_access_token": READ_TOKEN}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.ok:
+            data = r.json()
+            ACCOUNT_CACHE["name"] = data.get("name", "the company")
+    except Exception:
+        pass
+    return ACCOUNT_CACHE["name"] or "the company"
+
+
+def build_system_prompt(account_name):
+    return (
+        f"You are a helpful support assistant for {account_name}. "
+        "Answer concisely and naturally in the same language as the user. "
+        "Use the conversation history to understand the context."
+    )
 
 app = Flask(__name__)
 
@@ -105,15 +124,16 @@ def fetch_history(account_id, conversation_id):
 
 # ── Handlers por modo ──────────────────────────────────────────
 
-def handle_direct(sender, message, history):
+def handle_direct(sender, message, history, account_id=None):
     return f"Recibi tu mensaje: \"{message}\". Bot conectado a Chatwoot."
 
 
-def handle_openai(sender, message, history):
+def handle_openai(sender, message, history, account_id=None):
     if not OPENAI_API_KEY:
         return "Error: OPENAI_API_KEY no configurada."
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_prompt = build_system_prompt(get_account_name(account_id))
+    messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     messages.append({"role": "user", "content": message})
 
@@ -130,8 +150,9 @@ def handle_openai(sender, message, history):
     return r.json()["choices"][0]["message"]["content"]
 
 
-def handle_ollama(sender, message, history):
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+def handle_ollama(sender, message, history, account_id=None):
+    system_prompt = build_system_prompt(get_account_name(account_id))
+    messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     messages.append({"role": "user", "content": message})
 
@@ -201,7 +222,7 @@ def webhook():
             history = fetch_history(account_id, conversation_id)
             print(f"[CONTEXT] {len(history)} mensajes previos cargados")
 
-        bot_reply = reply_to_message(sender_id, content, history)
+        bot_reply = reply_to_message(sender_id, content, history, account_id)
         send_to_chatwoot(account_id, conversation_id, bot_reply)
     except Exception as e:
         print(f"[ERROR] {e}")

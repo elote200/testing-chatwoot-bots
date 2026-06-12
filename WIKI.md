@@ -1,5 +1,164 @@
 # Chatwoot API Integration Wiki
 
+## Índice
+
+- [Resumen del Flujo](#resumen-del-flujo)
+- [¿Qué necesita un Agent Bot?](#qué-necesita-un-agent-bot)
+- [Endpoints de la Integración](#endpoints-de-la-integración)
+- [Guía de Instalación: Chatwoot sin Docker](#guía-de-instalación-chatwoot-sin-docker)
+- [Crear un Agent Bot en Chatwoot](#crear-un-agent-bot-en-chatwoot)
+- [Correr las Implementaciones de Ejemplo](#correr-las-implementaciones-de-ejemplo)
+- [Errores de Instalación y Soluciones](#errores-de-instalación-y-soluciones)
+- [Modificaciones a Chatwoot](#modificaciones-a-chatwoot)
+- [Configuración del Proyecto C# (.NET 10) para el Bot Agent](#configuración-del-proyecto-c-net-10-para-el-bot-agent)
+
+---
+
+## Resumen del Flujo
+
+```
+┌──────────────┐     ┌──────────────────┐     ┌──────────────────────┐
+│   Cliente    │     │   Chatwoot       │     │   Agent Bot          │
+│  (Widget)    │────>│  (localhost:3000) │────>│  (localhost:8000)    │
+│              │     │                   │     │                      │
+│  Envía msj   │     │  1. Recibe msj   │     │  3. Procesa msj      │
+│              │     │  2. Webhook POST │     │     (AI: Ollama,     │
+│              │     │     al bot       │     │      Groq, OpenAI,   │
+│              │     │                   │     │      Rasa, etc.)    │
+│              │<────│  5. Muestra resp │<────│  4. POST respuesta   │
+│              │     │                   │     │     a Chatwoot API  │
+└──────────────┘     └──────────────────┘     └──────────────────────┘
+```
+
+### Paso a paso:
+
+1. El **cliente** envía un mensaje desde el widget de Chatwoot
+2. **Chatwoot** recibe el mensaje y dispara un **webhook POST** al `outgoing_url` del Agent Bot
+3. El **Agent Bot** recibe el webhook, extrae el mensaje, y lo procesa (lo envía a un modelo AI: Ollama, Groq, OpenAI, Rasa, etc.)
+4. El **Agent Bot** toma la respuesta del modelo y la envía de vuelta a Chatwoot mediante `POST /api/v1/accounts/{id}/conversations/{id}/messages`
+5. **Chatwoot** muestra la respuesta al cliente en el widget
+
+---
+
+## ¿Qué necesita un Agent Bot?
+
+Para que un agente AI externo se conecte a Chatwoot, necesita **exactamente 4 cosas**:
+
+### 1. URL de Chatwoot
+La dirección base del servidor Chatwoot. En local: `http://localhost:3000`.
+
+### 2. Token de acceso (API Key)
+Chatwoot genera un token único para cada Agent Bot. Se obtiene desde la consola de Rails:
+
+```ruby
+bot = AgentBot.create!(name: "Mi Bot", outgoing_url: "http://...")
+bot.access_token.token
+# => "x3ZqMmuo6RZbdJiWdXNjiFmF"
+```
+
+Este token se usa como `api_access_token` en los headers para autenticar las llamadas a la API de Chatwoot.
+
+### 3. Outgoing URL
+La URL que Chatwoot va a llamar cuando llegue un mensaje. Se define al crear el Agent Bot:
+
+```ruby
+outgoing_url: "http://localhost:8000/webhook"
+```
+
+Chatwoot envía un `POST` a esta URL con el payload del mensaje.
+
+### 4. Una ruta POST que recibe el webhook
+El agente debe tener un endpoint HTTP **POST** exactamente en la misma URL definida como `outgoing_url`. Cuando Chatwoot recibe un mensaje, envía allí un JSON con esta estructura:
+
+```json
+{
+  "message_type": "incoming",
+  "content": "Hola, necesito ayuda",
+  "conversation": {"id": 1},
+  "sender": {"id": 1},
+  "account": {"id": 1}
+}
+```
+
+### 5. Una ruta POST para responder a Chatwoot
+Para enviar la respuesta de vuelta, el agente llama a la API de Chatwoot:
+
+```
+POST http://localhost:3000/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages
+Headers:
+  Content-Type: application/json
+  api_access_token: <token_del_bot>
+Body:
+  { "content": "Respuesta generada por el bot" }
+```
+
+### Resumen visual de la configuración:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    CHATWOOT                              │
+│                                                         │
+│  Agent Bot: "Mi AI Bot"                                 │
+│  ├── Token:     x3ZqMmuo6RZbdJiWdXNjiFmF               │
+│  └── Outgoing:  http://localhost:8000/webhook            │
+│                                                         │
+│  ┌─ Inbox ──────────────────────────────────────────┐   │
+│  │  "Acme Support" (vinculado al Agent Bot)         │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+         │                           ▲
+         │  POST /webhook            │  POST /api/v1/.../messages
+         │  (mensaje del cliente)    │  (respuesta del bot)
+         ▼                           │
+┌─────────────────────────────────────────────────────────┐
+│                    AGENT BOT                             │
+│                                                         │
+│  router (localhost:8000)                                 │
+│                                                         │
+│  POST /webhook → recibe mensaje                         │
+│                → llama a AI (Ollama/Groq/OpenAI/Rasa)   │
+│                → POST respuesta a Chatwoot              │
+│                                                         │
+│  Variables:                                             │
+│  ├── CHATWOOT_URL    = http://localhost:3000            │
+│  ├── CHATWOOT_TOKEN  = x3ZqMmuo6RZbdJiWdXNjiFmF       │
+│  ├── AGENT_MODE      = direct | ollama | openai | rasa │
+│  └── (según modo): OLLAMA_URL, OPENAI_API_KEY, etc.    │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Endpoints de la Integración
+
+| Endpoint | Método | Quién llama | Propósito |
+|----------|--------|-------------|-----------|
+| `POST /webhook` (bot) | POST | Chatwoot | Chatwoot envía el mensaje del cliente al bot |
+| `POST /api/v1/accounts/{id}/conversations/{id}/messages` | POST | Agent Bot | El bot envía la respuesta a Chatwoot |
+| `GET /health` (bot) | GET | - | Health check del bot |
+
+El payload de entrada (Chatwoot → Bot):
+
+```json
+{
+  "message_type": "incoming",
+  "content": "texto del mensaje",
+  "conversation": { "id": 1 },
+  "sender": { "id": 1 },
+  "account": { "id": 1 }
+}
+```
+
+El payload de salida (Bot → Chatwoot):
+
+```json
+{
+  "content": "respuesta del bot"
+}
+```
+
+---
+
 ## Guía de Instalación: Chatwoot sin Docker
 
 Esta guía explica cómo ejecutar Chatwoot localmente **sin Docker** (modo desarrollo local), usando solo Docker para los servicios de infraestructura (PostgreSQL y Redis). Esto es necesario para que los agentes bots puedan comunicarse con Chatwoot a través de `localhost`.
@@ -45,8 +204,6 @@ docker run -d \
 > ⚠️ **Importante:** Si usas `docker compose up -d postgres redis mailhog`, el PostgreSQL del compose usa el puerto **5432** por defecto. Configura `POSTGRES_PORT=5432` en ese caso.
 
 ### Paso 2: Configurar variables de entorno
-
-Copia el `.env.example` y ajústalo para entorno local:
 
 ```bash
 cd chatwoot-server
@@ -106,8 +263,6 @@ cd chatwoot-server
 gem install bundler
 bundle install
 ```
-
-Esto instala todas las gems de Rails y Chatwoot (~150+ gems).
 
 > **Solución de errores comunes:**
 > - `Gem::Ext::BuildError`: instala paquetes faltantes con `sudo apt install build-essential libpq-dev libssl-dev libreadline-dev zlib1g-dev libyaml-dev`
@@ -182,10 +337,6 @@ sudo chown -R $USER:$USER public/packs
 pnpm run build:sdk
 ```
 
-Esto genera `public/packs/js/sdk.js`. Sin este archivo, el widget no carga (error `No route matches [GET] "/packs/js/sdk.js"`).
-
-> ⚠️ **Cada vez que clonas el repo en una maquina nueva**, tenes que ejecutar `pnpm run build:sdk` (despues de `pnpm install`).
-
 ### Paso 8: Verificar que funciona
 
 1. Abre `http://localhost:3000` en el navegador
@@ -238,87 +389,171 @@ Inbox.first.id            # inbox_id
 
 ---
 
-## Correr las Implementaciones de Ejemplo
+## Cómo correr el bot (test-bot.py)
 
-El repositorio tiene 4 implementaciones de ejemplo en `implementation-examples/`. La más práctica para probar es la de **Rasa** (Python) porque tiene un router Flask que puedes adaptar fácilmente.
+### Requisitos
 
-### Opción 1: Rasa Agent Bot (recomendada para empezar)
+- Python 3.10+
+- pip
 
-Esta implementación usa un router Flask que recibe webhooks de Chatwoot, consulta a Rasa, y responde.
+### 1. Primer inicio (solo una vez)
 
 ```bash
-cd implementation-examples/rasa-agent-bot-demo
+# Ir a la raiz del proyecto
+cd /home/kelvin/concu/chatwoot-api-agent-test
 
 # Crear entorno virtual
 python3 -m venv .venv
+
+# Activar entorno
 source .venv/bin/activate
 
 # Instalar dependencias
-pip install -r requirements.txt
+pip install flask requests python-dotenv gunicorn
 
-# Solucionar error de compatibilidad con Python 3.13+:
-# "ImportError: cannot import name 'soft_unicode' from 'markupsafe'"
-pip install --upgrade Jinja2 Flask
+# (Opcional) Copiar ejemplo de configuracion
+cp .env.example .env
 ```
 
-**Editar `rasa_flask_router.py`:**
+### 2. Configurar (.env)
 
-```python
-rasa_url = 'http://localhost:5005'
-chatwoot_url = 'http://localhost:3000'
-chatwoot_bot_token = '<EL_TOKEN_DE_TU_AGENT_BOT>'
+Editar `.env` con los valores correspondientes:
+
+```env
+CHATWOOT_URL=http://localhost:3000
+CHATWOOT_BOT_TOKEN=x3ZqMmuo6RZbdJiWdXNjiFmF
+AGENT_MODE=openai
+OPENAI_URL=https://api.groq.com/openai/v1
+OPENAI_API_KEY=gsk_tu_api_key
+OPENAI_MODEL=llama-3.3-70b-versatile
 ```
 
-**Iniciar el router:**
+> Si no tenes API key de Groq, usa `AGENT_MODE=direct` para probar sin conexion externa.
+
+### 3. Iniciar el bot
+
+Con el `.env` configurado:
 
 ```bash
-python3 -m gunicorn --workers=1 rasa_flask_router:app -b 0.0.0.0:8000
+source .venv/bin/activate   # si no lo activaste
+python3 test-bot.py
 ```
 
-**Probar desde el widget de Chatwoot:**
+Deberias ver:
 
-Abre `http://localhost:3000/widget_tests` y envía un mensaje.
+```
+[BOT] Modo=openai | Puerto=8000 | Chatwoot=http://localhost:3000
+ * Running on http://0.0.0.0:8000
+```
 
-**Flujo completo:**
-1. Cliente envía mensaje → Chatwoot
-2. Chatwoot envía webhook POST → `http://localhost:8000/rasa`
-3. Router Flask reenvía a Rasa → obtiene respuesta
-4. Router Flask envía respuesta → API de Chatwoot (`POST /api/v1/accounts/{id}/conversations/{id}/messages`)
-5. Cliente ve la respuesta
-
-### Opción 2: LangChain Agent Bot (con OpenAI)
-
-Esta implementación usa LangChain + OpenAI para responder preguntas sobre una base de datos SQL.
+### 4. Verificar que funciona
 
 ```bash
-cd implementation-examples/langchain-agent-bot-sqlchat
+# Health check
+curl http://localhost:8000/health
+# → {"status": "healthy", "mode": "openai"}
 
-python3 -m venv .venv
+# Simular un webhook de Chatwoot
+curl -X POST http://localhost:8000/webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message_type": "incoming",
+    "content": "Hola, esto es una prueba",
+    "conversation": {"id": 1},
+    "sender": {"id": 1},
+    "account": {"id": 1}
+  }'
+```
+
+### 5. Probar desde el widget
+
+Abrir en el navegador:
+
+```
+http://localhost:3000/widget_tests
+```
+
+Escribi un mensaje y el bot deberia responder automaticamente.
+
+---
+
+### Formas alternativas de iniciar
+
+#### Sin .env (variables inline)
+
+```bash
 source .venv/bin/activate
-pip install -r requirements.txt
+
+# Groq
+AGENT_MODE=openai \
+  OPENAI_URL=https://api.groq.com/openai/v1 \
+  OPENAI_API_KEY=gsk_tu_api_key \
+  OPENAI_MODEL=llama-3.3-70b-versatile \
+  python3 test-bot.py
+
+# OpenAI
+AGENT_MODE=openai \
+  OPENAI_API_KEY=sk-... \
+  OPENAI_MODEL=gpt-4o-mini \
+  python3 test-bot.py
+
+# Google Gemini
+AGENT_MODE=openai \
+  OPENAI_URL=https://generativelanguage.googleapis.com/v1beta/openai \
+  OPENAI_API_KEY=AIza... \
+  OPENAI_MODEL=gemini-2.0-flash \
+  python3 test-bot.py
+
+# Ollama (local)
+AGENT_MODE=ollama OLLAMA_MODEL=llama3.2 python3 test-bot.py
+
+# Modo directo (sin AI, para probar el flujo)
+AGENT_MODE=direct python3 test-bot.py
 ```
 
-**Editar `app.py`:**
-
-```python
-chatwoot_url = "http://localhost:3000"
-chatwoot_bot_token = "<EL_TOKEN_DE_TU_AGENT_BOT>"
-key = "tu_openai_api_key"
-# También configura los datos de PostgreSQL si quieres consultas SQL
-```
-
-**Iniciar:**
+#### En background (para no ocupar la terminal)
 
 ```bash
-python3 -m gunicorn app:app -b 0.0.0.0:8000
+nohup python3 test-bot.py > bot.log 2>&1 &
 ```
 
-**Configurar el Agent Bot:**
+#### Con gunicorn (produccion)
 
-Al crear el Agent Bot en la consola de Rails, usa:
-```ruby
-bot = AgentBot.create!(name: "LangChain Bot", outgoing_url: "http://localhost:8000/langchain")
+```bash
+source .venv/bin/activate
+pip install gunicorn
+python3 -m gunicorn --workers=1 test-bot:app -b 0.0.0.0:8000
 ```
+
+---
+
+### Modos del agente
+
+| Modo | `AGENT_MODE=` | ¿Qué hace? |
+|------|--------------|------------|
+| `direct` | `direct` | Responde inline (para pruebas, default) |
+| `openai` | `openai` | OpenAI, Groq, Google Gemini, etc. |
+| `ollama` | `ollama` | Modelo local con Ollama |
+
+### Variables de entorno
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `CHATWOOT_URL` | `http://localhost:3000` | Chatwoot server base URL |
+| `CHATWOOT_BOT_TOKEN` | `x3ZqMmuo6RZbdJiWdXNjiFmF` | Agent Bot API token |
+| `AGENT_MODE` | `direct` | Backend mode: `direct`, `openai`, or `ollama` |
+| `OPENAI_URL` | `https://api.openai.com/v1` | Base URL del API (OpenAI, Groq, Gemini, etc.) |
+| `OPENAI_API_KEY` | *(requerido en openai mode)* | API key del proveedor |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Modelo a usar |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_MODEL` | `llama3.2` | Ollama model name |
+| `PORT` | `8000` | Puerto donde corre el bot |
+
+---
+
+### Otras implementaciones
+
+En `implementation-examples/` hay ejemplos adicionales (Rasa, LangChain, etc.) como referencia para arquitecturas más complejas, pero el `test-bot.py` raíz es suficiente para el caso de uso principal.
 
 ---
 
@@ -506,6 +741,21 @@ docker run -d --name chatwoot-postgres -e POSTGRES_DB=chatwoot_dev \
 
 ---
 
+### Error 8: Webhook bloqueado por SSRF filter
+
+**Problema:** El bot recibe el webhook pero Sidekiq registra `Invalid webhook URL http://localhost:8000/webhook`.
+
+**Causa:** Chatwoot tiene un filtro SSRF (`lib/safe_fetch.rb`) que bloquea conexiones a direcciones de red privada (`localhost`, `127.0.0.1`, `10.x.x.x`, etc.) por seguridad. En producción esto es correcto, pero en desarrollo local necesitamos deshabilitarlo.
+
+**Solución:** Agregar al `.env`:
+```env
+SAFE_FETCH_ALLOW_PRIVATE_NETWORK=true
+```
+
+Luego reiniciar overmind (`Ctrl+C` y `overmind start -f ./Procfile.dev`).
+
+---
+
 ## Modificaciones a Chatwoot
 
 Para que Chatwoot funcione correctamente en entorno local sin Docker, se modificaron estos archivos. Si clonas el repo en otra máquina, tendrás que aplicar los mismos cambios.
@@ -522,6 +772,7 @@ Para que Chatwoot funcione correctamente en entorno local sin Docker, se modific
 | `POSTGRES_PASSWORD` | *(vacío)* | `postgres` |
 | `REDIS_URL` | `redis://redis:6379` | `redis://localhost:6379` |
 | `ENABLE_ACCOUNT_SIGNUP` | `false` | `true` (para desarrollo) |
+| `SAFE_FETCH_ALLOW_PRIVATE_NETWORK` | *(no existe)* | `true` (para webhooks locales) |
 
 Además se quitaron variables que apuntaban a servicios Docker como `SMTP_ADDRESS=mailhog`.
 
@@ -552,31 +803,6 @@ No se modificó ningún archivo de la aplicación (modelos, controladores, vista
 
 ---
 
-## Resumen del Flujo Completo
-
-```
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   Cliente        │     │   Chatwoot       │     │   Agent Bot      │
-│   (Web Widget)   │────>│   (localhost:3000)│────>│   (localhost:8000)│
-│                  │     │                  │     │                  │
-│                  │<────│                  │<────│                  │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
-```
-
-**Servicios necesarios:****
-
-| Servicio | Puerto | Propósito |
-|----------|--------|-----------|
-| Chatwoot (Rails) | 3000 | API + Web UI |
-| Vite Dev Server | 3036 | Frontend assets |
-| Sidekiq | - | Background jobs |
-| PostgreSQL | 5432/5433 | Base de datos |
-| Redis | 6379 | Cache + Queues |
-| Agent Bot | 8000 | Router/webhook del agente AI |
-| Rasa (opcional) | 5005 | NLP engine |
-
----
-
 ## Configuración del Proyecto C# (.NET 10) para el Bot Agent
 
 Cuando estés listo para crear tu propio agente en C#, aquí está la estructura mínima:
@@ -593,24 +819,22 @@ cd ChatwootBotAgent
 |----------|--------|-----------|
 | `POST /webhook` | POST | Recibir mensajes de Chatwoot (cuando se configura como Agent Bot) |
 | `GET /health` | GET | Health check |
-| - | - | Polling de conversaciones (alternativa a webhook) |
 
 **Requerimientos del agente:**
 
-1. **Webhook receptor** - Endpoint POST que Chatwoot llama cuando llega un mensaje
-2. **Cliente HTTP para Chatwoot API** - Enviar respuestas via `POST /api/v1/accounts/{id}/conversations/{id}/messages`
-3. **Conexión a modelo AI** - Ollama local o API de OpenAI/Anthropic
-4. **Token de acceso** - El `api_access_token` del Agent Bot creado en Chatwoot
+1. **Webhook receptor** — Endpoint POST que Chatwoot llama cuando llega un mensaje
+2. **Cliente HTTP para Chatwoot API** — Enviar respuestas via `POST /api/v1/accounts/{id}/conversations/{id}/messages`
+3. **Conexión a modelo AI** — Ollama local, Groq, OpenAI, Anthropic, etc.
+4. **Token de acceso** — El `api_access_token` del Agent Bot creado en Chatwoot
 
 **Variables de entorno necesarias (.env):**
 
 ```
 CHATWOOT_URL=http://localhost:3000
 CHATWOOT_ACCESS_TOKEN=<agent_bot_token>
-CHATWOOT_ACCOUNT_ID=1
-AI_PROVIDER=ollama    # ollama | openai | anthropic
-AI_MODEL=llama3
-AI_API_KEY=           # solo si AI_PROVIDER != ollama
+AI_PROVIDER=groq           # ollama | openai | groq | anthropic
+AI_MODEL=llama-3.3-70b-versatile
+AI_API_KEY=                # solo si AI_PROVIDER != ollama
 OLLAMA_URL=http://localhost:11434
 ```
 

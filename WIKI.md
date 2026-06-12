@@ -73,6 +73,10 @@ RAILS_ENV=development
 SECRET_KEY_BASE=your_secret_key_here_min_30_chars
 ENABLE_ACCOUNT_SIGNUP=true
 FORCE_SSL=false
+
+# Permitir webhooks a localhost (necesario para Agent Bots locales)
+# Sin esto, Chatwoot bloquea los webhooks a localhost/127.0.0.1 por seguridad SSRF
+SAFE_FETCH_ALLOW_PRIVATE_NETWORK=true
 ```
 
 ### Paso 3: Instalar Ruby 3.4.4

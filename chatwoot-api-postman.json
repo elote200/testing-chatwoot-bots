@@ -1,0 +1,337 @@
+{
+  "info": {
+    "name": "Chatwoot API - Agent Bot",
+    "description": "Coleccion de endpoints de la API de Chatwoot para conectar un Agent Bot.\n\nVariables globales a definir en Postman:\n  - base_url: http://localhost:3000\n  - token: x3ZqMmuo6RZbdJiWdXNjiFmF\n  - account_id: 1\n  - conversation_id: 1\n  - contact_id: 1\n\n## Tipos de mensaje (message_type)\n\n| Codigo | Nombre        | Descripcion                              |\n|--------|---------------|------------------------------------------|\n| 0      | incoming      | Mensaje del cliente (contact)            |\n| 1      | outgoing      | Respuesta automatica del bot             |\n| 2      | outgoing      | Respuesta de un agente humano            |\n| 3      | template      | Mensaje con plantilla (ej. confirmacion) |\n| 16     | input_select  | Menu de opciones                         |\n| 17     | cards         | Tarjetas con acciones                    |\n| 18     | form          | Formulario                               |\n\n## content_type (para mensajes entrantes)\n\n| Valor       | Descripcion          |\n|-------------|----------------------|\n| text        | Texto plano (default)|\n| input_select | Menu de opciones    |\n| cards       | Tarjetas             |\n| form        | Formulario           |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" },
+    { "key": "token", "value": "x3ZqMmuo6RZbdJiWdXNjiFmF" },
+    { "key": "account_id", "value": "1" },
+    { "key": "conversation_id", "value": "1" },
+    { "key": "contact_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "🤖 Bot (webhook receptor)",
+      "description": "Endpoints del bot. Chatwoot llama a POST /webhook cuando llega un mensaje.",
+      "item": [
+        {
+          "name": "Health check del bot",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://127.0.0.1:8000/health",
+              "host": ["http", "127.0.0.1:8000"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Simular webhook de Chatwoot",
+          "description": "Simula el payload que Chatwoot envia al bot por cada mensaje entrante.",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "http://127.0.0.1:8000/webhook",
+              "host": ["http", "127.0.0.1:8000"],
+              "path": ["webhook"]
+            },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message_type\": \"incoming\",\n  \"content\": \"Hola, necesito ayuda con mi pedido\",\n  \"conversation\": {\n    \"id\": {{conversation_id}}\n  },\n  \"sender\": {\n    \"id\": {{contact_id}}\n  },\n  \"account\": {\n    \"id\": {{account_id}}\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "💬 Mensajes",
+      "description": "Endpoints para enviar y recibir mensajes en conversaciones.",
+      "item": [
+        {
+          "name": "Enviar mensaje (el bot responde)",
+          "description": "El bot usa este endpoint para responder al cliente.\n\nNota: message_type=1 es para el bot. Si usas un token de agente humano, usa 2.\n\ncontent_type posibles: text (default), input_select, cards, form.",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations/{{conversation_id}}/messages",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations", "{{conversation_id}}", "messages"]
+            },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "api_access_token", "value": "{{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Hola, gracias por contactarnos. Con gusto te ayudo con tu pedido.\",\n  \"message_type\": 1,\n  \"content_type\": \"text\",\n  \"private\": false\n}"
+            }
+          }
+        },
+        {
+          "name": "Enviar mensaje template",
+          "description": "Mensaje con plantilla predefinida (message_type=3).",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations/{{conversation_id}}/messages",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations", "{{conversation_id}}", "messages"]
+            },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "api_access_token", "value": "{{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Tu pedido #12345 ha sido confirmado\",\n  \"message_type\": 3,\n  \"content_type\": \"text\",\n  \"private\": false,\n  \"template_params\": {\n    \"template\": \"order_confirmation\",\n    \"namespace\": \"whatsapp\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Enviar mensaje privado (solo agentes)",
+          "description": "Mensaje interno visible solo para agentes (private=true).",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations/{{conversation_id}}/messages",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations", "{{conversation_id}}", "messages"]
+            },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "api_access_token", "value": "{{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"[NOTA INTERNA] Este cliente tiene historial de pagos atrasados.\",\n  \"message_type\": 2,\n  \"content_type\": \"text\",\n  \"private\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "Obtener mensajes de una conversacion",
+          "description": "Obtiene todos los mensajes de una conversacion.\n\nNota: El token de Agent Bot NO tiene permiso de lectura. Usar un Personal Access Token de usuario.",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations/{{conversation_id}}/messages",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations", "{{conversation_id}}", "messages"]
+            },
+            "header": [
+              { "key": "api_access_token", "value": "{{token}}" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "💬 Conversaciones",
+      "description": "Endpoints para listar y gestionar conversaciones.",
+      "item": [
+        {
+          "name": "Listar conversaciones",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations?status=open&page=1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations"],
+              "query": [
+                { "key": "status", "value": "open" },
+                { "key": "page", "value": "1" },
+                { "key": "assignee_type", "value": "all", "disabled": true }
+              ]
+            },
+            "header": [
+              { "key": "api_access_token", "value": "{{token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Crear conversacion",
+          "description": "Crea una nueva conversacion para un contacto en un inbox.",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations"]
+            },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "api_access_token", "value": "{{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_id\": \"contacto-123\",\n  \"inbox_id\": 1,\n  \"contact_id\": {{contact_id}},\n  \"additional_attributes\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "Obtener detalle de conversacion",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations/{{conversation_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations", "{{conversation_id}}"]
+            },
+            "header": [
+              { "key": "api_access_token", "value": "{{token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Asignar conversation a agente",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations/{{conversation_id}}/assignments",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations", "{{conversation_id}}", "assignments"]
+            },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "api_access_token", "value": "{{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignee_id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "Toggle estado (resolver/reabrir)",
+          "description": "Cambia el estado de la conversacion. Status posibles: open, resolved, pending, snoozed.",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/conversations/{{conversation_id}}/toggle_status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "conversations", "{{conversation_id}}", "toggle_status"]
+            },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "api_access_token", "value": "{{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"resolved\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👤 Contactos",
+      "description": "Endpoints para gestionar contactos.",
+      "item": [
+        {
+          "name": "Listar contactos",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/contacts?page=1&sort=name",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "contacts"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "sort", "value": "name", "disabled": true }
+              ]
+            },
+            "header": [
+              { "key": "api_access_token", "value": "{{token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Crear contacto",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/contacts",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "contacts"]
+            },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "api_access_token", "value": "{{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"inbox_id\": 1,\n  \"name\": \"Juan Perez\",\n  \"email\": \"juan@ejemplo.com\",\n  \"phone_number\": \"+529991234567\",\n  \"additional_attributes\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "Obtener contacto por ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/contacts/{{contact_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "contacts", "{{contact_id}}"]
+            },
+            "header": [
+              { "key": "api_access_token", "value": "{{token}}" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔧 Configuracion",
+      "description": "Endpoints de utilidad y configuracion.",
+      "item": [
+        {
+          "name": "Listar inboxes",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/inboxes",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "inboxes"]
+            },
+            "header": [
+              { "key": "api_access_token", "value": "{{token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Listar agentes",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/agents",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "agents"]
+            },
+            "header": [
+              { "key": "api_access_token", "value": "{{token}}" }
+            ]
+          }
+        },
+        {
+          "name": "Listar Agent Bots",
+          "description": "Lista todos los Agent Bots registrados en la cuenta.",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/agent_bots",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "{{account_id}}", "agent_bots"]
+            },
+            "header": [
+              { "key": "api_access_token", "value": "{{token}}" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -32,6 +32,7 @@ load_dotenv()
 # ── Config desde variables de entorno ──────────────────────────
 CHATWOOT_URL = os.environ.get('CHATWOOT_URL', 'http://localhost:3000')
 BOT_TOKEN = os.environ.get('CHATWOOT_BOT_TOKEN', 'x3ZqMmuo6RZbdJiWdXNjiFmF')
+READ_TOKEN = os.environ.get('CHATWOOT_READ_TOKEN', BOT_TOKEN)
 AGENT_MODE = os.environ.get('AGENT_MODE', 'direct')
 ENABLE_CONTEXT = os.environ.get('ENABLE_CONTEXT', 'true').lower() == 'true'
 
@@ -67,7 +68,7 @@ def fetch_history(account_id, conversation_id):
         f"{CHATWOOT_URL}/api/v1/accounts/{account_id}"
         f"/conversations/{conversation_id}/messages"
     )
-    headers = {"api_access_token": BOT_TOKEN}
+    headers = {"api_access_token": READ_TOKEN}
     r = requests.get(url, headers=headers, timeout=30)
 
     if not r.ok:
@@ -76,8 +77,13 @@ def fetch_history(account_id, conversation_id):
         return []
 
     messages = r.json()
+
+    # La API envuelve los mensajes en {meta, payload}
+    if isinstance(messages, dict):
+        messages = messages.get('payload', [])
+
     if not isinstance(messages, list):
-        print(f"[CONTEXT] Respuesta inesperada de la API, usando solo mensaje actual")
+        print(f"[CONTEXT] API devolvio formato desconocido. Usando solo mensaje actual.")
         return []
 
     history = []
@@ -147,31 +153,58 @@ BACKENDS = {
 reply_to_message = BACKENDS.get(AGENT_MODE, handle_direct)
 
 
+# ── Cache para evitar responder dos veces al mismo mensaje ──
+_processed_ids = set()
+
+
 # ── Rutas ──────────────────────────────────────────────────────
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
+    if not data:
+        print("[WEBHOOK] Payload vacio, ignorado")
+        return {"status": "ignored"}, 200
+
     message_type = data.get('message_type')
-    content = data.get('content', '')
+    content = data.get('content', '') or ''
     conversation_id = data.get('conversation', {}).get('id')
     sender_id = data.get('sender', {}).get('id')
     account_id = data.get('account', {}).get('id')
+    message_id = data.get('id')
+    sender_type = data.get('sender', {}).get('type')
 
     print(f"[{message_type}] Conv {conversation_id}: {content[:80]}")
 
-    if message_type == 'incoming' and account_id and conversation_id:
-        try:
-            # Obtener contexto de la conversacion (mensajes anteriores)
-            history = []
-            if ENABLE_CONTEXT:
-                history = fetch_history(account_id, conversation_id)
-                print(f"[CONTEXT] {len(history)} mensajes previos cargados")
+    # Solo responder a mensajes entrantes del cliente (no a los del propio bot)
+    if message_type != 'incoming':
+        return {"status": "ignored"}, 200
 
-            bot_reply = reply_to_message(sender_id, content, history)
-            send_to_chatwoot(account_id, conversation_id, bot_reply)
-        except Exception as e:
-            print(f"[ERROR] {e}")
+    if not account_id or not conversation_id:
+        print("[WEBHOOK] Faltan datos esenciales, ignorado")
+        return {"status": "ignored"}, 200
+
+    # Evitar procesar el mismo mensaje dos veces
+    if message_id and message_id in _processed_ids:
+        print(f"[WEBHOOK] Mensaje {message_id} ya procesado, ignorado")
+        return {"status": "duplicated"}, 200
+
+    if message_id:
+        _processed_ids.add(message_id)
+        # Limitar el cache a 1000 IDs para no acumular infinito
+        if len(_processed_ids) > 1000:
+            _processed_ids.pop()
+
+    try:
+        history = []
+        if ENABLE_CONTEXT:
+            history = fetch_history(account_id, conversation_id)
+            print(f"[CONTEXT] {len(history)} mensajes previos cargados")
+
+        bot_reply = reply_to_message(sender_id, content, history)
+        send_to_chatwoot(account_id, conversation_id, bot_reply)
+    except Exception as e:
+        print(f"[ERROR] {e}")
 
     return {"status": "ok"}, 200
 
@@ -207,4 +240,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     print(f"[BOT] Modo={AGENT_MODE} | Contexto={ENABLE_CONTEXT} | Puerto={port}")
     print(f"[BOT] Esperando webhooks en POST /webhook ...")
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)

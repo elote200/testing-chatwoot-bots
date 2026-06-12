@@ -1,473 +1,620 @@
 # Chatwoot API Integration Wiki
 
-## Índice
-1. [Autenticación](#autenticación)
-2. [Endpoints Principales](#endpoints-principales)
-3. [Flujo de Agent Bot](#flujo-de-agent-bot)
-4. [Estructuras de Datos](#estructuras-de-datos)
-5. [Errores Comunes](#errores-comunes)
-6. [Ejemplos de Integración](#ejemplos-de-integración)
+## Guía de Instalación: Chatwoot sin Docker
+
+Esta guía explica cómo ejecutar Chatwoot localmente **sin Docker** (modo desarrollo local), usando solo Docker para los servicios de infraestructura (PostgreSQL y Redis). Esto es necesario para que los agentes bots puedan comunicarse con Chatwoot a través de `localhost`.
+
+### Prerrequisitos
+
+| Herramienta | Versión | Cómo verificar |
+|-------------|---------|---------------|
+| Ruby | 3.4.4 | `ruby --version` |
+| Node.js | >= 18 | `node --version` |
+| pnpm | >= 8 | `pnpm --version` |
+| PostgreSQL | 16+ | `psql --version` |
+| Redis | 6+ | `redis-cli ping` |
+| rbenv | - | `rbenv --version` |
+
+### Paso 1: Infraestructura con Docker (PostgreSQL + Redis)
+
+Solo PostgreSQL y Redis corren en Docker. Chatwoot corre localmente.
+
+```bash
+# Opción A: Usar docker-compose solo para los servicios
+cd chatwoot-server
+docker compose up -d postgres redis mailhog
+
+# Opción B: PostgreSQL manual con port mapping
+docker run -d \
+  --name chatwoot-postgres \
+  -e POSTGRES_DB=chatwoot_dev \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 5433:5432 \
+  pgvector/pgvector:pg16
+
+# Redis (usar el que ya está corriendo o iniciar uno)
+docker run -d \
+  --name chatwoot-redis \
+  -p 6379:6379 \
+  redis:alpine
+```
+
+> **Nota de puertos:** Si ya tienes PostgreSQL en el puerto 5432, usa el 5433. Luego configura `POSTGRES_PORT=5433` en el `.env`.
+>
+> ⚠️ **Importante:** Si usas `docker compose up -d postgres redis mailhog`, el PostgreSQL del compose usa el puerto **5432** por defecto. Configura `POSTGRES_PORT=5432` en ese caso.
+
+### Paso 2: Configurar variables de entorno
+
+Copia el `.env.example` y ajústalo para entorno local:
+
+```bash
+cd chatwoot-server
+cp .env.example .env
+```
+
+Edita `.env` con estos valores clave:
+
+```env
+# Database - apuntando a localhost
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5433
+POSTGRES_USERNAME=postgres
+POSTGRES_PASSWORD=postgres
+RAILS_MAX_THREADS=5
+
+# Redis local
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=
+
+# Chatwoot
+FRONTEND_URL=http://localhost:3000
+RAILS_ENV=development
+SECRET_KEY_BASE=your_secret_key_here_min_30_chars
+ENABLE_ACCOUNT_SIGNUP=true
+FORCE_SSL=false
+```
+
+### Paso 3: Instalar Ruby 3.4.4
+
+```bash
+# Instalar rbenv si no lo tienes
+git clone https://github.com/rbenv/rbenv.git ~/.rbenv
+git clone https://github.com/rbenv/ruby-build.git ~/.rbenv/plugins/ruby-build
+
+# Agregar rbenv al PATH
+echo 'export PATH="$HOME/.rbenv/bin:$PATH"' >> ~/.bashrc
+echo 'eval "$(rbenv init -)"' >> ~/.bashrc
+source ~/.bashrc
+
+# Instalar Ruby 3.4.4
+rbenv install 3.4.4
+rbenv local 3.4.4    # dentro de chatwoot-server/
+ruby --version       # debe mostrar 3.4.4
+```
+
+> **Tiempo estimado:** 5-15 minutos. Ruby se compila desde fuente.
+
+### Paso 4: Instalar dependencias Ruby (Bundler)
+
+```bash
+cd chatwoot-server
+gem install bundler
+bundle install
+```
+
+Esto instala todas las gems de Rails y Chatwoot (~150+ gems).
+
+> **Solución de errores comunes:**
+> - `Gem::Ext::BuildError`: instala paquetes faltantes con `sudo apt install build-essential libpq-dev libssl-dev libreadline-dev zlib1g-dev libyaml-dev`
+> - Si falla `pg` gem: `sudo apt install libpq-dev`
+
+### Paso 5: Instalar pnpm y dependencias frontend
+
+```bash
+# Instalar pnpm globalmente si no lo tienes
+npm install -g pnpm
+
+cd chatwoot-server
+pnpm install
+```
+
+### Paso 6: Configurar la base de datos
+
+```bash
+cd chatwoot-server
+
+# Crear la base de datos
+bundle exec rails db:create
+
+# Ejecutar migraciones
+bundle exec rails db:migrate
+
+# Sembrar datos de prueba (opcional pero recomendado)
+bundle exec rails db:seed
+```
+
+> **Nota:** `db:seed` crea una cuenta de prueba, inbox y datos básicos.
+
+### Paso 7: Iniciar Chatwoot
+
+Chatwoot necesita 3 procesos: Rails server, Vite (frontend), y Sidekiq (background jobs).
+
+```bash
+# Desde chatwoot-server/, en 3 terminales distintas:
+
+# Terminal 1 - Rails API + Web
+bundle exec rails s -b 0.0.0.0 -p 3000
+
+# Terminal 2 - Frontend (Vite)
+pnpm run vite:dev
+
+# Terminal 3 - Sidekiq (procesamiento en segundo plano)
+bundle exec sidekiq
+```
+
+O usa `overmind` (recomendado):
+
+```bash
+# Instalar overmind
+gem install overmind
+
+# Iniciar todo
+overmind start -f ./Procfile.dev
+```
+
+### Paso 7.5: Compilar el SDK del Widget (obligatorio)
+
+El widget de Chatwoot tiene un SDK separado que **no se compila automáticamente** con `vite:dev`. Hay que buildearlo manualmente.
+
+```bash
+cd chatwoot-server
+
+# Asegurar permisios
+sudo chown -R $USER:$USER public/packs
+# Si no tenes sudo: rm -rf public/packs && mkdir -p public/packs/js
+
+# Compilar SDK
+pnpm run build:sdk
+```
+
+Esto genera `public/packs/js/sdk.js`. Sin este archivo, el widget no carga (error `No route matches [GET] "/packs/js/sdk.js"`).
+
+> ⚠️ **Cada vez que clonas el repo en una maquina nueva**, tenes que ejecutar `pnpm run build:sdk` (despues de `pnpm install`).
+
+### Paso 8: Verificar que funciona
+
+1. Abre `http://localhost:3000` en el navegador
+2. Deberías ver la página de login de Chatwoot
+3. Si ejecutaste `db:seed`, las credenciales por defecto son:
+   - **URL:** `http://localhost:3000`
+   - **Email:** Revisa la salida del seed (usualmente `admin@chatwoot.com` o similar)
+   - **Password:** `Password1!`
 
 ---
 
-## Autenticación
+## Crear un Agent Bot en Chatwoot
 
-### Método: API Key
+Una vez que Chatwoot está corriendo, necesitas crear un Agent Bot para que tu agente AI pueda conectarse.
 
-Todas las solicitudes a la API de Chatwoot requieren un header `api_access_token`:
+### Paso 1: Obtener un Access Token de Agent Bot
 
-```
-api_access_token: your_api_key_here
-```
+Abre la consola de Rails:
 
-### Obtener API Key
-
-1. Ir a Chatwoot Dashboard
-2. Navegas a Settings → Access Tokens
-3. Crear nuevo token con permisos necesarios
-4. Copiar el token generado
-
-### Headers Requeridos
-
-```
-Content-Type: application/json
-api_access_token: YOUR_API_KEY
+```bash
+cd chatwoot-server
+bundle exec rails c
 ```
 
----
+Dentro de la consola, ejecuta:
 
-## Endpoints Principales
-
-### 1. Conversations (Conversaciones)
-
-#### Obtener Conversación
-
-```
-GET /api/v1/accounts/{account_id}/conversations/{conversation_id}
+```ruby
+bot = AgentBot.create!(name: "Mi AI Bot", outgoing_url: "http://localhost:8000/webhook")
+bot.access_token.token
+# => "tu_token_generado"
 ```
 
-**Headers:**
-```
-api_access_token: YOUR_API_KEY
-```
+Guarda ese token. Es lo que el agente usará para autenticarse.
 
-**Response (200 OK):**
-```json
-{
-  "payload": {
-    "id": 123,
-    "inbox_id": 1,
-    "contact_id": 456,
-    "status": "open",
-    "created_at": "2024-01-01T10:00:00Z",
-    "updated_at": "2024-01-01T10:30:00Z",
-    "messages": [
-      {
-        "id": 1,
-        "conversation_id": 123,
-        "message_type": "incoming",
-        "content": "Hello",
-        "sender_id": 456,
-        "created_at": "2024-01-01T10:00:00Z"
-      }
-    ]
-  }
-}
+### Paso 2: Conectar el Agent Bot a un Inbox
+
+```ruby
+# En la misma consola de Rails:
+inbox = Inbox.first
+bot = AgentBot.last
+AgentBotInbox.create!(inbox: inbox, agent_bot: bot)
 ```
 
-#### Listar Conversaciones
+### Paso 3: Obtener IDs necesarios
 
-```
-GET /api/v1/accounts/{account_id}/conversations?status=open&limit=20
-```
-
-**Query Parameters:**
-- `status`: open, pending, resolved, snoozed
-- `limit`: Número de conversaciones (default: 15, max: 100)
-- `offset`: Para paginación
-
----
-
-### 2. Messages (Mensajes)
-
-#### Enviar Mensaje
-
-```
-POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/messages
-```
-
-**Request Body:**
-```json
-{
-  "content": "Thank you for reaching out!",
-  "message_type": "outgoing",
-  "private": false
-}
-```
-
-**Response (201 Created):**
-```json
-{
-  "payload": {
-    "id": 2,
-    "conversation_id": 123,
-    "content": "Thank you for reaching out!",
-    "message_type": "outgoing",
-    "sender_id": null,
-    "created_at": "2024-01-01T10:05:00Z"
-  }
-}
-```
-
-**Message Types:**
-- `incoming`: Mensaje del cliente
-- `outgoing`: Mensaje del agente
-- `activity`: Evento de actividad
-
----
-
-### 3. Contacts (Contactos)
-
-#### Obtener Contacto
-
-```
-GET /api/v1/accounts/{account_id}/contacts/{contact_id}
-```
-
-**Response:**
-```json
-{
-  "payload": {
-    "id": 456,
-    "email": "customer@example.com",
-    "name": "John Doe",
-    "phone_number": "+1234567890",
-    "created_at": "2024-01-01T09:00:00Z"
-  }
-}
+```ruby
+Account.first.id          # account_id (usualmente 1)
+Inbox.first.id            # inbox_id
 ```
 
 ---
 
-### 4. Inboxes (Bandejas)
+## Correr las Implementaciones de Ejemplo
 
-#### Listar Inboxes
+El repositorio tiene 4 implementaciones de ejemplo en `implementation-examples/`. La más práctica para probar es la de **Rasa** (Python) porque tiene un router Flask que puedes adaptar fácilmente.
 
+### Opción 1: Rasa Agent Bot (recomendada para empezar)
+
+Esta implementación usa un router Flask que recibe webhooks de Chatwoot, consulta a Rasa, y responde.
+
+```bash
+cd implementation-examples/rasa-agent-bot-demo
+
+# Crear entorno virtual
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Instalar dependencias
+pip install -r requirements.txt
+
+# Solucionar error de compatibilidad con Python 3.13+:
+# "ImportError: cannot import name 'soft_unicode' from 'markupsafe'"
+pip install --upgrade Jinja2 Flask
 ```
-GET /api/v1/accounts/{account_id}/inboxes
+
+**Editar `rasa_flask_router.py`:**
+
+```python
+rasa_url = 'http://localhost:5005'
+chatwoot_url = 'http://localhost:3000'
+chatwoot_bot_token = '<EL_TOKEN_DE_TU_AGENT_BOT>'
 ```
 
-**Response:**
-```json
-{
-  "payload": [
-    {
-      "id": 1,
-      "account_id": 1,
-      "name": "Support",
-      "channel_type": "web_widget",
-      "created_at": "2024-01-01T00:00:00Z"
-    }
-  ]
-}
+**Iniciar el router:**
+
+```bash
+python3 -m gunicorn --workers=1 rasa_flask_router:app -b 0.0.0.0:8000
+```
+
+**Probar desde el widget de Chatwoot:**
+
+Abre `http://localhost:3000/widget_tests` y envía un mensaje.
+
+**Flujo completo:**
+1. Cliente envía mensaje → Chatwoot
+2. Chatwoot envía webhook POST → `http://localhost:8000/rasa`
+3. Router Flask reenvía a Rasa → obtiene respuesta
+4. Router Flask envía respuesta → API de Chatwoot (`POST /api/v1/accounts/{id}/conversations/{id}/messages`)
+5. Cliente ve la respuesta
+
+### Opción 2: LangChain Agent Bot (con OpenAI)
+
+Esta implementación usa LangChain + OpenAI para responder preguntas sobre una base de datos SQL.
+
+```bash
+cd implementation-examples/langchain-agent-bot-sqlchat
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Editar `app.py`:**
+
+```python
+chatwoot_url = "http://localhost:3000"
+chatwoot_bot_token = "<EL_TOKEN_DE_TU_AGENT_BOT>"
+key = "tu_openai_api_key"
+# También configura los datos de PostgreSQL si quieres consultas SQL
+```
+
+**Iniciar:**
+
+```bash
+python3 -m gunicorn app:app -b 0.0.0.0:8000
+```
+
+**Configurar el Agent Bot:**
+
+Al crear el Agent Bot en la consola de Rails, usa:
+```ruby
+bot = AgentBot.create!(name: "LangChain Bot", outgoing_url: "http://localhost:8000/langchain")
 ```
 
 ---
 
-## Flujo de Agent Bot
+## Errores de Instalación y Soluciones
 
-### Diagrama de Flujo
+Todos los errores que encontramos durante la instalación local, junto con sus soluciones.
 
+### Error 1: Ruby no compila — `psych: Could not be configured`
+
+**Error:**
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Cliente envia mensaje a Chatwoot                             │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Chatwoot recibe mensaje (webhook o polling)                 │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Agent Service procesa el mensaje                            │
-│ - Obtiene contexto de conversación                          │
-│ - Genera respuesta (AI model)                               │
-│ - Prepara reply                                             │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Agent envia respuesta via API                               │
-│ POST /api/v1/accounts/{id}/conversations/{id}/messages     │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Cliente recibe respuesta en Chatwoot                         │
-└─────────────────────────────────────────────────────────────┘
+*** Following extensions are not compiled:
+psych:
+Could not be configured. It will not be installed.
+BUILD FAILED
 ```
 
-### Flujo en Código
-
-```csharp
-// 1. Obtener conversación pendiente
-var conversation = await chatwootClient.GetConversationAsync(accountId, conversationId, apiKey);
-
-// 2. Procesar último mensaje
-var lastMessage = conversation.Messages.Last();
-var userInput = lastMessage.Content;
-
-// 3. Generar respuesta (con AI model)
-var aiResponse = await aiModel.GenerateResponse(userInput);
-
-// 4. Enviar respuesta
-var sendRequest = new SendMessageRequest { Content = aiResponse };
-await chatwootClient.SendMessageAsync(accountId, conversationId, sendRequest, apiKey);
-
-// 5. Actualizar estado si es necesario
-// await chatwootClient.UpdateConversationStatusAsync(accountId, conversationId, "resolved", apiKey);
-```
-
----
-
-## Estructuras de Datos
-
-### Conversation Object
-
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| `id` | int | ID único de la conversación |
-| `inbox_id` | int | ID de la bandeja |
-| `contact_id` | int | ID del contacto |
-| `status` | string | open, pending, resolved, snoozed |
-| `messages` | array | Array de mensajes |
-| `created_at` | datetime | Fecha de creación |
-| `updated_at` | datetime | Última actualización |
-
-### Message Object
-
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| `id` | int | ID único del mensaje |
-| `conversation_id` | int | ID de la conversación |
-| `content` | string | Contenido del mensaje |
-| `message_type` | string | incoming, outgoing, activity |
-| `sender_id` | int | ID de quien envía (null si es bot) |
-| `created_at` | datetime | Fecha de creación |
-
-### Contact Object
-
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| `id` | int | ID único del contacto |
-| `email` | string | Email del contacto |
-| `name` | string | Nombre completo |
-| `phone_number` | string | Número de teléfono |
-| `created_at` | datetime | Fecha de creación |
-
----
-
-## Errores Comunes
-
-### 401 Unauthorized
-
-```json
-{
-  "error": "Unauthorized"
-}
-```
-
-**Causas:**
-- API key inválido o expirado
-- Header `api_access_token` faltante
-- Account ID incorrecto
+**Causa:** Falta `libyaml-dev` en el sistema. La gema `psych` (parser YAML de Ruby) necesita esta librería para compilarse. Sin YAML, Rails no arranca.
 
 **Solución:**
-- Verificar API key en Chatwoot
-- Validar formato del header
-
-### 404 Not Found
-
-```json
-{
-  "error": "Not Found"
-}
+```bash
+sudo apt install -y libyaml-dev libffi-dev libgmp-dev
+# Luego limpiar y reinstalar
+rbenv uninstall 3.4.4
+rbenv install 3.4.4
 ```
 
-**Causas:**
-- Conversation ID no existe
-- Account ID incorrecto
-- Inbox no existe
-
-**Solución:**
-- Verificar IDs en el dashboard
-- Confirmar que la conversación/contacto existe
-
-### 422 Unprocessable Entity
-
-```json
-{
-  "error": "Invalid parameters"
-}
-```
-
-**Causas:**
-- Datos inválidos en el request
-- Mensaje vacío
-- Formato incorrecto
-
-**Solución:**
-- Validar datos antes de enviar
-- Revisar estructura del request
-
-### 429 Too Many Requests
-
-```json
-{
-  "error": "Rate limit exceeded"
-}
-```
-
-**Causas:**
-- Demasiadas solicitudes en poco tiempo
-
-**Solución:**
-- Implementar rate limiting en el agente
-- Usar exponential backoff
-
----
-
-## Ejemplos de Integración
-
-### Ejemplo 1: Polling de Conversaciones
-
-```csharp
-var accountId = 1;
-var apiKey = "your_api_key";
-
-// Obtener conversaciones pendientes
-var response = await chatwootClient.GetConversationsAsync(accountId, apiKey);
-
-if (response.IsSuccessStatusCode)
-{
-    foreach (var conversation in response.Content)
-    {
-        if (conversation.Status == "pending")
-        {
-            // Procesar conversación
-            var lastMessage = conversation.Messages?.LastOrDefault();
-            if (lastMessage?.MessageType == "incoming")
-            {
-                var reply = GenerateResponse(lastMessage.Content);
-                await SendReply(accountId, conversation.Id, reply);
-            }
-        }
-    }
-}
-```
-
-### Ejemplo 2: Webhook Receiver
-
-```csharp
-[HttpPost("webhook/message")]
-public async Task<IActionResult> HandleMessageWebhook([FromBody] WebhookPayload payload)
-{
-    // Chatwoot envía el evento
-    var conversationId = payload.Data.ConversationId;
-    var messageContent = payload.Data.Message.Content;
-    
-    // Generar respuesta
-    var response = await _aiService.GenerateResponse(messageContent);
-    
-    // Enviar reply
-    await _agentService.SendReplyAsync(conversationId, response);
-    
-    return Ok();
-}
-```
-
-### Ejemplo 3: Con AI Model (Ollama)
-
-```csharp
-public async Task ProcessConversation(int conversationId)
-{
-    // 1. Obtener contexto
-    var conversation = await _chatwootClient.GetConversationAsync(
-        _settings.AccountId, conversationId, _settings.ApiKey);
-    
-    // 2. Extraer mensaje
-    var messages = conversation.Messages
-        .OrderBy(m => m.CreatedAt)
-        .Select(m => new { role = m.MessageType, content = m.Content })
-        .ToList();
-    
-    // 3. Generar respuesta con Ollama
-    var ollamaResponse = await _httpClient.PostAsync(
-        "http://localhost:11434/api/generate",
-        new StringContent(JsonConvert.SerializeObject(new {
-            model = "llama2",
-            prompt = messages.Last().content,
-            stream = false
-        }))
-    );
-    
-    var result = JsonConvert.DeserializeObject<dynamic>(
-        await ollamaResponse.Content.ReadAsStringAsync());
-    
-    // 4. Enviar respuesta
-    await _agentService.SendReplyAsync(conversationId, result.response);
-}
+**Dependencias completas recomendadas antes de instalar Ruby:**
+```bash
+sudo apt install -y \
+  build-essential \
+  libssl-dev \
+  libreadline-dev \
+  zlib1g-dev \
+  libyaml-dev \
+  libffi-dev \
+  libgmp-dev \
+  libpq-dev \
+  libcurl4-openssl-dev
 ```
 
 ---
 
-## Rate Limiting
+### Error 2: `Errno::EACCES: Permission denied @ rb_sysopen - log/development.log`
 
-Chatwoot implementa rate limiting:
-- **Límite:** Típicamente 1000 requests por minuto
-- **Header de respuesta:** `RateLimit-Remaining`
+**Error:**
+```
+Errno::EACCES: Permission denied @ rb_sysopen - .../chatwoot-server/log/development.log
+```
 
-Para implementar en el agente:
+**Causa:** La carpeta `log/` no existe o no tiene permisos de escritura. Rails intenta crear/abrir el archivo de log y falla.
 
-```csharp
-public class RateLimitHandler : DelegatingHandler
-{
-    private int _remainingRequests = 1000;
-    
-    protected override async Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request, CancellationToken cancellationToken)
-    {
-        var response = await base.SendAsync(request, cancellationToken);
-        
-        if (response.Headers.TryGetValues("RateLimit-Remaining", out var values))
-        {
-            if (int.TryParse(values.First(), out var remaining))
-            {
-                _remainingRequests = remaining;
-                if (_remainingRequests < 10)
-                    _logger.Warning("Rate limit approaching: {Remaining}", _remainingRequests);
-            }
-        }
-        
-        return response;
-    }
-}
+**Solución:**
+```bash
+cd chatwoot-server
+mkdir -p log tmp public/assets public/packs
+chmod -R u+w log tmp
 ```
 
 ---
 
-## Recursos
+### Error 3: `Connection refused` a PostgreSQL
 
-- [Documentación oficial de Chatwoot API](https://developers.chatwoot.com/api-reference/introduction)
-- [Agent Bots Guide](https://www.chatwoot.com/hc/articles/1677497472-how-to-use-agent-bots)
-- [Webhooks Documentation](https://developers.chatwoot.com/docs/product/conversations/webhooks)
-- [Rate Limiting Info](https://developers.chatwoot.com/docs/platform/api/rate-limiting)
+**Error:**
+```
+connection to server at "127.0.0.1", port 5433 failed: Connection refused
+Is the server running on that host and accepting TCP/IP connections?
+Couldn't create 'chatwoot_dev' database.
+```
+
+**Causa:** El contenedor de PostgreSQL se detuvo, se eliminó, o el puerto configurado en `.env` no coincide con el puerto real del contenedor. Esto pasa típicamente cuando:
+- Docker reinicia y los contenedores personalizados se pierden
+- Se usa `docker compose` que levanta PostgreSQL en un puerto diferente al configurado
+
+**Solución:**
+```bash
+# Verificar contenedores activos
+docker ps --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}"
+
+# Verificar que PostgreSQL responde en el puerto correcto
+PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -c "SELECT 1"
+
+# Ajustar .env al puerto correcto (comúnmente 5432 o 5433)
+# POSTGRES_PORT=5432  ó  POSTGRES_PORT=5433
+```
+
+> ⚠️ Si usas `docker compose up -d postgres`, PostgreSQL queda en puerto **5432**. Si creaste el contenedor manualmente con `docker run -p 5433:5432`, usa el **5433**. Siempre verifica con `docker ps`.
+
+---
+
+### Error 4: `uninitialized constant ActsAsTaggableOn::Taggable::Cache`
+
+**Error al ejecutar `db:migrate`:**
+```
+uninitialized constant ActsAsTaggableOn::Taggable::Cache
+Did you mean?  CacheKeys
+db/migrate/20231211010807_add_cached_labels_list.rb:5:in 'AddCachedLabelsList#change'
+```
+
+**Causa:** La gema `acts-as-taggable-on` se actualizó a v12, que eliminó el módulo `ActsAsTaggableOn::Taggable::Cache`. Una migration vieja de Chatwoot (del 2023) intenta usarlo.
+
+**Solución (modificar el archivo de migration):**
+
+Editar `db/migrate/20231211010807_add_cached_labels_list.rb` y eliminar la línea del Cache:
+
+```ruby
+# Antes (roto):
+class AddCachedLabelsList < ActiveRecord::Migration[7.0]
+  def change
+    add_column :conversations, :cached_label_list, :string
+    Conversation.reset_column_information
+    ActsAsTaggableOn::Taggable::Cache.included(Conversation)  # <-- esta línea falla
+  end
+end
+
+# Después (arreglado):
+class AddCachedLabelsList < ActiveRecord::Migration[7.0]
+  def change
+    add_column :conversations, :cached_label_list, :string
+  end
+end
+```
+
+**¿Por qué es seguro?** La línea eliminada solo inicializaba un concern de cache tagging que ya no existe en la gema v12. La columna `cached_label_list` se agrega correctamente, y el modelo `Conversation` maneja el etiquetado por sí mismo.
+
+---
+
+### Error 5: Warning de `fiddle` — librería estándar obsoleta
+
+**Warning:**
+```
+warning: .../fiddle.rb was loaded from the standard library,
+but will no longer be part of the default gems starting from Ruby 3.5.0.
+```
+
+**Causa:** La gema `reline-0.3.6` usa `fiddle` que viene en la stdlib pero será eliminada en Ruby 3.5. Es solo un **warning**, no un error.
+
+**Solución:** No requiere acción. Se puede ignorar. Para silenciarlo en el futuro, se puede agregar `gem 'fiddle'` al Gemfile de Chatwoot, pero no es necesario para el funcionamiento.
+
+---
+
+### Error 6: Base de datos no existe en `db:seed`
+
+**Error:**
+```
+ActiveRecord::NoDatabaseError: We could not find your database: chatwoot_dev
+```
+
+**Causa:** No se ejecutó `db:create` o `db:migrate` antes de `db:seed`.
+
+**Solución:**
+```bash
+# El orden correcto es:
+bundle exec rails db:create
+bundle exec rails db:migrate
+bundle exec rails db:seed
+```
+
+---
+
+### Error 7: `address already in use` al iniciar servicios
+
+**Error:**
+```
+ERROR: for postgres  Cannot start service postgres: driver failed programming external connectivity...
+Error starting userland proxy: listen tcp4 0.0.0.0:5432: bind: address already in use
+```
+
+**Causa:** Otro servicio (como `knowledge-postgres` u otra instancia de PostgreSQL) ya está usando el puerto 5432.
+
+**Solución:**
+```bash
+# Identificar qué está usando el puerto
+sudo lsof -i :5432
+
+# Opción A: Detener el otro servicio
+docker stop knowledge-postgres
+
+# Opción B: Usar un puerto diferente (ej: 5433) creando el contenedor manualmente
+docker run -d --name chatwoot-postgres -e POSTGRES_DB=chatwoot_dev \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+  -p 5433:5432 pgvector/pgvector:pg16
+# Y configurar POSTGRES_PORT=5433 en el .env
+```
+
+---
+
+## Modificaciones a Chatwoot
+
+Para que Chatwoot funcione correctamente en entorno local sin Docker, se modificaron estos archivos. Si clonas el repo en otra máquina, tendrás que aplicar los mismos cambios.
+
+### 1. `chatwoot-server/.env` — Configuración local
+
+**Cambios respecto al `.env.example` original:**
+
+| Variable | Valor original (Docker) | Valor modificado (local) |
+|----------|------------------------|--------------------------|
+| `POSTGRES_HOST` | `postgres` | `localhost` |
+| `POSTGRES_PORT` | *(no definido)* | `5432` (o `5433` según el puerto) |
+| `POSTGRES_USERNAME` | `postgres` | `postgres` |
+| `POSTGRES_PASSWORD` | *(vacío)* | `postgres` |
+| `REDIS_URL` | `redis://redis:6379` | `redis://localhost:6379` |
+| `ENABLE_ACCOUNT_SIGNUP` | `false` | `true` (para desarrollo) |
+
+Además se quitaron variables que apuntaban a servicios Docker como `SMTP_ADDRESS=mailhog`.
+
+### 2. `chatwoot-server/db/migrate/20231211010807_add_cached_labels_list.rb` — Parche de migration
+
+**Archivo:** `db/migrate/20231211010807_add_cached_labels_list.rb`
+
+**Cambio:** Se eliminó la línea `ActsAsTaggableOn::Taggable::Cache.included(Conversation)`.
+
+**Razón:** La gema `acts-as-taggable-on` v12 eliminó el módulo `Cache`. Sin este cambio, `bundle exec rails db:migrate` falla con `uninitialized constant ActsAsTaggableOn::Taggable::Cache`.
+
+**Cómo aplicar el mismo cambio en una máquina nueva:**
+```bash
+# Después de clonar el repo, editar la migration
+nano db/migrate/20231211010807_add_cached_labels_list.rb
+# Eliminar la línea 5 (ActsAsTaggableOn::Taggable::Cache.included(Conversation))
+```
+
+O puedes aplicar este parche vía sed:
+```bash
+sed -i '/ActsAsTaggableOn::Taggable::Cache.included/d' \
+  db/migrate/20231211010807_add_cached_labels_list.rb
+```
+
+### 3. Sin cambios en el código de Chatwoot
+
+No se modificó ningún archivo de la aplicación (modelos, controladores, vistas, etc.). Solo el `.env` y la migration mencionada. Como indica la regla del proyecto: **no tocar el código de Chatwoot**.
+
+---
+
+## Resumen del Flujo Completo
+
+```
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│   Cliente        │     │   Chatwoot       │     │   Agent Bot      │
+│   (Web Widget)   │────>│   (localhost:3000)│────>│   (localhost:8000)│
+│                  │     │                  │     │                  │
+│                  │<────│                  │<────│                  │
+└──────────────────┘     └──────────────────┘     └──────────────────┘
+```
+
+**Servicios necesarios:****
+
+| Servicio | Puerto | Propósito |
+|----------|--------|-----------|
+| Chatwoot (Rails) | 3000 | API + Web UI |
+| Vite Dev Server | 3036 | Frontend assets |
+| Sidekiq | - | Background jobs |
+| PostgreSQL | 5432/5433 | Base de datos |
+| Redis | 6379 | Cache + Queues |
+| Agent Bot | 8000 | Router/webhook del agente AI |
+| Rasa (opcional) | 5005 | NLP engine |
+
+---
+
+## Configuración del Proyecto C# (.NET 10) para el Bot Agent
+
+Cuando estés listo para crear tu propio agente en C#, aquí está la estructura mínima:
+
+```bash
+# Crear el proyecto
+dotnet new webapi -n ChatwootBotAgent
+cd ChatwootBotAgent
+```
+
+**Endpoints necesarios que tu agente debe implementar:**
+
+| Endpoint | Método | Propósito |
+|----------|--------|-----------|
+| `POST /webhook` | POST | Recibir mensajes de Chatwoot (cuando se configura como Agent Bot) |
+| `GET /health` | GET | Health check |
+| - | - | Polling de conversaciones (alternativa a webhook) |
+
+**Requerimientos del agente:**
+
+1. **Webhook receptor** - Endpoint POST que Chatwoot llama cuando llega un mensaje
+2. **Cliente HTTP para Chatwoot API** - Enviar respuestas via `POST /api/v1/accounts/{id}/conversations/{id}/messages`
+3. **Conexión a modelo AI** - Ollama local o API de OpenAI/Anthropic
+4. **Token de acceso** - El `api_access_token` del Agent Bot creado en Chatwoot
+
+**Variables de entorno necesarias (.env):**
+
+```
+CHATWOOT_URL=http://localhost:3000
+CHATWOOT_ACCESS_TOKEN=<agent_bot_token>
+CHATWOOT_ACCOUNT_ID=1
+AI_PROVIDER=ollama    # ollama | openai | anthropic
+AI_MODEL=llama3
+AI_API_KEY=           # solo si AI_PROVIDER != ollama
+OLLAMA_URL=http://localhost:11434
+```
 
 ---
 
 ## Últimas Actualizaciones
 
 - **2024-01-01**: Documentación inicial creada
+- **2025-06-11**: Agregada guía de instalación Chatwoot sin Docker, Agent Bots, y ejemplos
 - **Versión Chatwoot API:** v1
-- **Última revisión:** 2024-01-01
+- **Última revisión:** 2025-06-11

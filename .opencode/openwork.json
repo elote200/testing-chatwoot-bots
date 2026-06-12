@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "workspace": {
+    "name": "chatwoot-api-agent-test",
+    "createdAt": 1781181683804,
+    "preset": "starter"
+  },
+  "authorizedRoots": [
+    "/home/kelvin/concu/chatwoot-api-agent-test"
+  ],
+  "reload": null
+}

@@ -19,7 +19,7 @@
 ```
 ┌──────────────┐     ┌──────────────────┐     ┌──────────────────────┐
 │   Cliente    │     │   Chatwoot       │     │   Agent Bot          │
-│  (Widget)    │────>│  (localhost:3000) │────>│  (localhost:8000)    │
+│  (Widget)    │────>│  (localhost:3000) │────>│  (127.0.0.1:8000)    │
 │              │     │                   │     │                      │
 │  Envía msj   │     │  1. Recibe msj   │     │  3. Procesa msj      │
 │              │     │  2. Webhook POST │     │     (AI: Ollama,     │
@@ -62,7 +62,7 @@ Este token se usa como `api_access_token` en los headers para autenticar las lla
 La URL que Chatwoot va a llamar cuando llegue un mensaje. Se define al crear el Agent Bot:
 
 ```ruby
-outgoing_url: "http://localhost:8000/webhook"
+outgoing_url: "http://127.0.0.1:8000/webhook"
 ```
 
 Chatwoot envía un `POST` a esta URL con el payload del mensaje.
@@ -100,7 +100,7 @@ Body:
 │                                                         │
 │  Agent Bot: "Mi AI Bot"                                 │
 │  ├── Token:     x3ZqMmuo6RZbdJiWdXNjiFmF               │
-│  └── Outgoing:  http://localhost:8000/webhook            │
+│  └── Outgoing:  http://127.0.0.1:8000/webhook           │
 │                                                         │
 │  ┌─ Inbox ──────────────────────────────────────────┐   │
 │  │  "Acme Support" (vinculado al Agent Bot)         │   │
@@ -113,7 +113,7 @@ Body:
 ┌─────────────────────────────────────────────────────────┐
 │                    AGENT BOT                             │
 │                                                         │
-│  router (localhost:8000)                                 │
+│  router (127.0.0.1:8000)                                 │
 │                                                         │
 │  POST /webhook → recibe mensaje                         │
 │                → llama a AI (Ollama/Groq/OpenAI/Rasa)   │
@@ -364,7 +364,7 @@ bundle exec rails c
 Dentro de la consola, ejecuta:
 
 ```ruby
-bot = AgentBot.create!(name: "Mi AI Bot", outgoing_url: "http://localhost:8000/webhook")
+bot = AgentBot.create!(name: "Mi AI Bot", outgoing_url: "http://127.0.0.1:8000/webhook")
 bot.access_token.token
 # => "tu_token_generado"
 ```
@@ -755,6 +755,28 @@ SAFE_FETCH_ALLOW_PRIVATE_NETWORK=true
 Luego reiniciar overmind (`Ctrl+C` y `overmind start -f ./Procfile.dev`).
 
 ---
+
+### Error 9: El bot responde a veces sí y a veces no ("Connection refused ::1")
+
+**Síntoma:** El bot funciona intermitentemente. En el log de Chatwoot aparece:
+```
+Failed to open TCP connection to ::1:8000 (Connection refused)
+```
+
+**Causa:** `localhost` resuelve a veces a IPv4 (`127.0.0.1`) y a veces a IPv6 (`::1`). Si el bot solo escucha en IPv4, la conexión por IPv6 falla.
+
+**Solución:** Cambiar el `outgoing_url` del Agent Bot para que use `127.0.0.1` explícitamente:
+
+```bash
+cd chatwoot-server
+bundle exec rails runner "
+bot = AgentBot.find_by(name: 'Mi AI Bot')
+bot.update!(outgoing_url: 'http://127.0.0.1:8000/webhook')
+puts 'OK: ' + bot.outgoing_url
+"
+```
+
+Luego reiniciar overmind para que tome el cambio.
 
 ## Modificaciones a Chatwoot
 

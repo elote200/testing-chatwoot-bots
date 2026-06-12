@@ -146,4 +146,5 @@ def send_to_chatwoot(account, conversation, content):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     print(f"[BOT] Modo={AGENT_MODE} | Puerto={port} | Chatwoot={CHATWOOT_URL}")
+    print(f"[BOT] Esperando webhooks en POST /webhook ...")
     app.run(host='0.0.0.0', port=port, debug=True)

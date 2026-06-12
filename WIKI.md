@@ -159,6 +159,69 @@ El payload de salida (Bot → Chatwoot):
 
 ---
 
+## Ver Mensajes y Conversaciones
+
+### Desde la consola de Rails
+
+```bash
+cd chatwoot-server
+bundle exec rails c
+```
+
+```ruby
+# Todas las conversaciones
+Conversation.all
+
+# Mensajes de la conversacion 1
+c = Conversation.find(1)
+c.messages.each do |m|
+  puts "[#{m.message_type}] #{m.sender&.name}: #{m.content}"
+end
+
+# message_type:
+#   0 = incoming (mensaje del cliente)
+#   1 = outgoing (respuesta automatica del bot)
+#   2 = outgoing (respuesta de un agente humano)
+
+# Solo los del bot:
+c.messages.where(message_type: 1).each do |m|
+  puts "BOT: #{m.content}"
+end
+
+# Contar mensajes por tipo:
+c.messages.group(:message_type).count
+
+# Ver todas las conversaciones de un inbox:
+inbox = Inbox.find(1)
+inbox.conversations.each do |conv|
+  puts "--- Conversacion #{conv.id} ---"
+  conv.messages.each do |m|
+    puts "  [#{m.message_type}] #{m.content[0..60]}"
+  end
+end
+```
+
+### Desde la API REST
+
+```bash
+curl -s "http://localhost:3000/api/v1/accounts/1/conversations/1/messages" \
+  -H "api_access_token: x3ZqMmuo6RZbdJiWdXNjiFmF" | python3 -m json.tool
+```
+
+### Campos importantes de un mensaje
+
+| Campo | Descripcion |
+|-------|-------------|
+| `id` | ID unico del mensaje |
+| `content` | Texto del mensaje |
+| `message_type` | 0=cliente, 1=bot, 2=agente |
+| `sender.type` | `Contact`, `User`, o `AgentBot` |
+| `sender.name` | Nombre de quien envio |
+| `created_at` | Timestamp Unix |
+| `conversation_id` | ID de la conversacion a la que pertenece |
+
+---
+
 ## Guía de Instalación: Chatwoot sin Docker
 
 Esta guía explica cómo ejecutar Chatwoot localmente **sin Docker** (modo desarrollo local), usando solo Docker para los servicios de infraestructura (PostgreSQL y Redis). Esto es necesario para que los agentes bots puedan comunicarse con Chatwoot a través de `localhost`.
@@ -477,6 +540,47 @@ Escribi un mensaje y el bot deberia responder automaticamente.
 
 ---
 
+### Contexto de Conversacion (ENABLE_CONTEXT)
+
+Por defecto, el bot obtiene **todos los mensajes anteriores** de la conversacion y se los pasa al AI como contexto. Asi el AI no solo responde el ultimo mensaje, sino que entiende todo el historial.
+
+**Como funciona:**
+
+1. Chatwoot envia el webhook con el nuevo mensaje
+2. El bot llama a `GET /api/v1/accounts/{id}/conversations/{id}/messages`
+3. Convierte los mensajes a formato `{role, content}`:
+   - `message_type=0` (cliente) → `role: "user"`
+   - `message_type=1` (bot) o `2` (agente) → `role: "assistant"`
+4. Envia el array completo al AI: `[system, user, assistant, user, ...]`
+
+**El prompt que recibe el AI se ve asi:**
+
+```
+System: You are a helpful support assistant...
+User:   Hola, necesito ayuda con mi pedido
+Assistant: Claro, dime el numero de pedido
+User:   12345
+Assistant: <responde sabiendo que el usuario ya dio su numero>
+```
+
+**Nota:** El token de Agent Bot (`api_access_token`) no tiene permiso para **leer** mensajes via API REST. Si el contexto no se puede obtener, el bot responde solo con el mensaje actual sin error.
+
+**Para habilitar el contexto completo** necesitas usar un **token de usuario** (Personal Access Token) en lugar del token del bot:
+
+1. En Chatwoot, ve a Settings → Profile → Personal Access Tokens
+2. Genera un token nuevo
+3. Usalo como `CHATWOOT_BOT_TOKEN` en el `.env`
+
+**Desactivar el contexto** (si queres que cada mensaje sea independiente):
+
+```env
+ENABLE_CONTEXT=false
+```
+
+**Nota sobre tokens:** El contexto consume mas tokens porque incluye todo el historial. Con conversations largas (>20 mensajes) considera limitar la cantidad de mensajes anteriores.
+
+---
+
 ### Formas alternativas de iniciar
 
 #### Sin .env (variables inline)
@@ -547,6 +651,7 @@ python3 -m gunicorn --workers=1 test-bot:app -b 0.0.0.0:8000
 | `OPENAI_MODEL` | `gpt-4o-mini` | Modelo a usar |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_MODEL` | `llama3.2` | Ollama model name |
+| `ENABLE_CONTEXT` | `true` | Pasa el historial completo de la conversacion al AI |
 | `PORT` | `8000` | Puerto donde corre el bot |
 
 ---

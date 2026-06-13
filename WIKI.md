@@ -11,6 +11,7 @@ La wiki está dividida en tres archivos para facilitar la navegación:
 | [wiki/general.md](wiki/general.md) | **Información General** — Flujo de integración, qué necesita un Agent Bot, endpoints, estructura de datos (Message/Conversation), contexto de conversación para AI, tipos de mensaje |
 | [wiki/setup.md](wiki/setup.md) | **Instalación de Chatwoot Local** — Guía paso a paso para correr Chatwoot sin Docker (PostgreSQL + Redis en Docker), creación de Agent Bot, errores de instalación y soluciones, modificaciones realizadas |
 | [wiki/bot.md](wiki/bot.md) | **Implementación del Bot** — Cómo correr test-bot.py, explicación del código (fetch_history, handle_openai, handle_ollama), modos del agente, variables de entorno, proyecto C# (.NET 10) de referencia |
+| [wiki/testing.md](wiki/testing.md) | **Testing de Conversaciones** — Widget test page, crear conversaciones (API/Rails/widget), múltiples cuentas e inboxes, vincular bot, flujo completo de prueba |
 
 ## Archivos del Proyecto
 

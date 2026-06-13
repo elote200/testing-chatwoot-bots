@@ -12,6 +12,7 @@
 **Archivos relacionados:**
 - [Información General](general.md) — flujo de integración, endpoints, estructuras de datos
 - [Instalación de Chatwoot Local](setup.md) — cómo correr Chatwoot sin Docker
+- [Testing de Conversaciones](testing.md) — widget test, crear cuentas/inboxes, flujo de prueba
 
 ---
 

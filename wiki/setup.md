@@ -19,6 +19,7 @@ Esta guía explica cómo ejecutar Chatwoot localmente **sin Docker** (modo desar
 **Archivos relacionados:**
 - [Información General](general.md) — flujo de integración, endpoints, estructuras de datos
 - [Implementación del Bot](bot.md) — cómo correr test-bot.py, variables, modos
+- [Testing de Conversaciones](testing.md) — widget test, crear cuentas/inboxes, flujo de prueba
 
 ---
 

@@ -11,6 +11,7 @@
 **Archivos relacionados:**
 - [Instalación de Chatwoot Local](setup.md) — cómo correr Chatwoot sin Docker
 - [Implementación del Bot](bot.md) — cómo correr test-bot.py, variables, modos
+- [Testing de Conversaciones](testing.md) — widget test, crear cuentas/inboxes, flujo de prueba
 
 ---
 
